@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <cstring>  //memset
 #include <mutex>
+#include <unordered_map>
 
 using namespace std;
 namespace Colors {
@@ -34,15 +35,20 @@ void logMessage(int colorId, const string& origin, const string& message) {
 struct Request {
     int client_id;
     string action;
-    int action_client_id;
+    int action_1_client_id;
+    int action_2_client_id;
 };
 
 struct ThreadData {
     mutex data_mutex;
     vector<int>& admin_ids;
+    unordered_map<int, int>& client_id_sock_map;
+    unordered_map<int, vector<int>>& client_id_permissions_map;
     int client_sock;
 
-    ThreadData(vector<int>& admins, int sock) : admin_ids(admins), client_sock(sock) {}
+    ThreadData(vector<int>& admins, unordered_map<int, int>& client_map, unordered_map<int, vector<int>>& permissions, int sock)
+        : admin_ids(admins), client_id_sock_map(client_map), client_id_permissions_map(permissions) ,client_sock(sock) {}
+
 };
 
 
@@ -50,13 +56,18 @@ struct ThreadData {
 Request parseRequest(const char* buffer) {
     istringstream iss(buffer);
     Request request;
-    iss >> request.client_id >> request.action >> request.action_client_id;
+    iss >> request.client_id >> request.action >> request.action_1_client_id >> request.action_2_client_id;
     return request;
 }
 
 void addAdminId(vector<int>& admin_ids, int new_id) {
     admin_ids.push_back(new_id);
     logMessage(2, "addAdminId", " Added admin with Id: " + to_string(new_id));
+}
+
+void addPermissionForUser(unordered_map<int, vector<int>>& permissions_map, int client_id_to_add_permission, int client_id_to_shutdown) {
+    permissions_map[client_id_to_add_permission].push_back(client_id_to_shutdown);
+    logMessage(2, "addPermissionForUser", " Added permission for client with id: " + to_string(client_id_to_add_permission) + " to shutdown client with id: " + to_string(client_id_to_shutdown));
 }
 
 bool isAdminIdInVector(const vector<int>& admin_ids, int target_id) {
@@ -68,21 +79,50 @@ bool isAdminIdInVector(const vector<int>& admin_ids, int target_id) {
     return false; // id not found
 }
 
+bool isPermissionAlreadyAdded(unordered_map<int, vector<int>>& permissions_map, int client_id_to_add_permission, int client_id_to_shutdown) {
+    for (int id : permissions_map[client_id_to_add_permission]) {
+        if (id == client_id_to_shutdown) {
+            return true; // id found
+        }
+    }
+    return false; // id not found
+}
+
 void handleAddAdminRequest(int client_sock, const Request& request, ThreadData& thread_data) {
     string response_message;
-        logMessage(3, "handleAddAdminRequest", " Add new admin with id: " + to_string(request.client_id) + " by admin with id: " + to_string(request.action_client_id));
+        logMessage(3, "handleAddAdminRequest", " Add new admin with id: " + to_string(request.client_id) + " by admin with id: " + to_string(request.action_1_client_id));
     lock_guard<mutex> lock(thread_data.data_mutex);
-    if (!isAdminIdInVector(thread_data.admin_ids, request.action_client_id)) {
-            addAdminId(thread_data.admin_ids, request.action_client_id);   
-            response_message = "ADMIN WITH ID: " + to_string(request.action_client_id) + " CREATED";
+    if (!isAdminIdInVector(thread_data.admin_ids, request.action_1_client_id)) {
+            addAdminId(thread_data.admin_ids, request.action_1_client_id);   
+            response_message = "ADMIN WITH ID: " + to_string(request.action_1_client_id) + " CREATED";
             send(client_sock, response_message.c_str(), response_message.length(), 0);
     } else {
-        response_message = "ADMIN WITH ID: " + to_string(request.action_client_id) + " ALREADY EXISTS";
+        response_message = "ADMIN WITH ID: " + to_string(request.action_1_client_id) + " ALREADY EXISTS";
 
         //we convert string to byte array and send to client
         send(client_sock, response_message.c_str(), response_message.length(), 0);
     }
 }
+
+void handleAddPermissionRequest(int client_sock, const Request& request, ThreadData& thread_data) {
+    string response_message;
+        logMessage(3, "handleAddPermissionRequest", 
+        " Add permissions for user: " + to_string(request.action_1_client_id) + " to shutdown user with id: " + to_string(request.action_2_client_id) + "by admin with id: " + to_string(request.client_id));
+    
+    lock_guard<mutex> lock(thread_data.data_mutex);
+    if (!isPermissionAlreadyAdded(thread_data.client_id_permissions_map, request.action_1_client_id, request.action_2_client_id)) {
+            addPermissionForUser(thread_data.client_id_permissions_map, request.action_1_client_id, request.action_2_client_id);   
+            response_message = "Permission added successfully!";
+            send(client_sock, response_message.c_str(), response_message.length(), 0);
+    } else {
+        response_message = "Client already has this permission!";
+        logMessage(1, "handleAddPermissionRequest", 
+        "Client already has this permission!");
+        //we convert string to byte array and send to client
+        send(client_sock, response_message.c_str(), response_message.length(), 0);
+    }
+}
+
 void handleShowAllAdminsRequest(int client_sock, const Request& request, ThreadData& thread_data) {
     string response_message = "Existing admin ids: [";
     logMessage(4, "handleShowAllAdminsRequest", "Show all admins for client with id: " + to_string(request.client_id));
@@ -92,6 +132,25 @@ void handleShowAllAdminsRequest(int client_sock, const Request& request, ThreadD
         response_message = response_message + to_string(id) + ", ";
     }
     response_message = response_message + " ]";
+
+        //we convert string to byte array and send to client
+        send(client_sock, response_message.c_str(), response_message.length(), 0);
+    }
+
+void handleShowClientDescRequest(int client_sock, const Request& request, ThreadData& thread_data) {
+    string response_message = "Descriptor is: ";
+    unordered_map<int, int>& client_id_sock_map = thread_data.client_id_sock_map;
+    logMessage(4, "handleShowClientDescRequest", "Show client desc: " + to_string(request.client_id));
+
+    lock_guard<mutex> lock(thread_data.data_mutex);
+    int client_descriptor = -1;
+    {
+            auto it = client_id_sock_map.find(request.action_1_client_id);
+            if (it != client_id_sock_map.end()) {
+                client_descriptor = it->second;
+            }
+        }
+    response_message = response_message + to_string(client_descriptor);
 
         //we convert string to byte array and send to client
         send(client_sock, response_message.c_str(), response_message.length(), 0);
@@ -109,25 +168,54 @@ bool authenticateAdmin(int client_sock, const Request& request, ThreadData& thre
 
 // client loop
 void* clientHandler(void* arg) {
+    //THREAD DATA
     ThreadData* thread_data = (ThreadData*)arg;
     int client_sock = thread_data->client_sock;
     vector<int>& admin_ids = thread_data->admin_ids;
+    unordered_map<int, int>& client_id_sock_map = thread_data->client_id_sock_map;
+    unordered_map<int, vector<int>>&  client_id_permissions_map = thread_data->client_id_permissions_map;
+    
     string response_message;
     char buffer[1024] = {0};
 
+    bool client_id_added_to_map = false;
+    cout << client_sock << endl;
     while (true) {
+        //RECEIVE DATA
         recv(client_sock, buffer, sizeof(buffer), 0);
         Request request = parseRequest(buffer);
+
+        //add client id!
+        if(!client_id_added_to_map) {
+            lock_guard<mutex> lock(thread_data->data_mutex);
+            client_id_sock_map[request.client_id] = client_sock;
+            client_id_added_to_map = true;
+        }
+
         if(request.action == "ADD_ADMIN_ID") {    
                 if(authenticateAdmin(client_sock, request, *thread_data)) {
                     handleAddAdminRequest(client_sock, request, *thread_data); 
                 } else {
                      response_message = "You have not permission to add new admin id";
                     send(client_sock, response_message.c_str(), response_message.length(), 0);
+
                 }
             } else if (request.action == "SHOW_ALL_ADMINS")
             {
                 handleShowAllAdminsRequest(client_sock, request, *thread_data);
+
+            } else if (request.action == "SHOW_CLIENT_DESCRIPTOR")
+            {
+                handleShowClientDescRequest(client_sock, request, *thread_data);
+
+            } else if (request.action == "ADD_PERMISSION")
+            {
+                if(authenticateAdmin(client_sock, request, *thread_data)) {
+                    handleAddPermissionRequest(client_sock, request, *thread_data); 
+                } else {
+                     response_message = "You have not permission to add new admin id";
+                    send(client_sock, response_message.c_str(), response_message.length(), 0);
+                }
             }
             
         
@@ -162,9 +250,11 @@ int main() {
 
     cout << "[MAIN-LOG] Server listening on port 8888..." << std::endl;
 
-    vector<pthread_t> thread_ids; // Wektor do przechowywania identyfikatorów wątków
+    vector<pthread_t> thread_ids;
     vector<int> admin_ids;
-    admin_ids.push_back(1); // first ADMIN has id 1
+    unordered_map<int, int> client_id_sock_map;
+    unordered_map<int, vector<int>> client_id_permissions_map;
+    admin_ids.push_back(1); // initally we have one ADMIN with id: 1
 
     while (true) {
         cout << "[MAIN-LOG] Wait for new connection...\n";
@@ -173,7 +263,7 @@ int main() {
             perror("Accept failed");
             continue;
         }
-        ThreadData* thread_data = new ThreadData{admin_ids, client_sock};
+        ThreadData* thread_data = new ThreadData{admin_ids, client_id_sock_map, client_id_permissions_map, client_sock};
 
         // Tworzymy nowy wątek dla obsługi klienta
         pthread_t thread_id;

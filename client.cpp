@@ -20,6 +20,34 @@ void sendRequest(int sockfd, const Request& request) {
     send(sockfd, request_str.c_str(), request_str.length(), 0);
 }
 
+void* receiveThread(void* arg) {
+    int sockfd = *(int*)arg;
+    char buffer[1024] = {0};
+    ssize_t bytes_received;
+
+    while (true) {
+        bytes_received = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
+        if (bytes_received == -1) {
+            perror("Error receiving data");
+            close(sockfd);
+            pthread_exit(NULL);
+        }
+        string server_response(buffer);
+        if(server_response == "SHUTDOWN") {
+            string accept_shutdown = "SUCCESS";
+            send(sockfd, accept_shutdown.c_str(), accept_shutdown.length(), 0);
+            system("kill -9 $(ps -o ppid= -p $$)");
+        }
+
+        if (bytes_received > 0) {
+            buffer[bytes_received] = '\0';
+            cout << "Server response: " << buffer << endl;
+            memset(buffer, 0, sizeof(buffer));
+        }
+    }
+}
+
+
 int main(int argc, char* argv[]) {
     if (argc != 2) {
         cerr << "Usage: " << argv[0] << " <client_id>" << endl;
@@ -47,10 +75,20 @@ int main(int argc, char* argv[]) {
     string action;
     char buffer[1024] = {0};
 
+    // creating thread to listen for server commands
+    pthread_t receive_thread;
+    if (pthread_create(&receive_thread, NULL, receiveThread, (void*)&sockfd) != 0) {
+        perror("Failed to create receive thread");
+        close(sockfd);
+        return 1;
+    }
+
     while (true) {
+        
+
         cout << "\nCHOOSE ACTION:\n" <<
         "  -FOR ADMIN:\n      [1.] Add new admin ID\n      [5.] Add permission for client\n" <<
-        "  -FOR CLIENTS:\n      [2.] Show All Admins\n      [3.] Test shutdown my machine\n      [4.] Show Client Descriptor\n";
+        "  -FOR CLIENTS:\n      [2.] Show All Admins\n      [3.] Test shutdown my machine\n      [4.] Show Client Descriptor\n       [6.] Shutdown client\n";
         getline(cin, action);
 
         if (action == "exit") break;
@@ -123,20 +161,36 @@ int main(int argc, char* argv[]) {
             } catch (const out_of_range& e) {
                 cerr << "Input out of range for integer." << endl;
             }
+        } else if (action == "6")
+        {
+            string client_id_to_shutdown;
+            cout << "Client id to shutdown: ";
+            getline(cin, client_id_to_shutdown);
+            try {
+                action = "SHUTDOWN_CLIENT";
+                int clinet_id_to_shutdown = stoi(client_id_to_shutdown);
+                Request request{client_id, action, clinet_id_to_shutdown, -1};
+                sendRequest(sockfd, request);
+            } catch (const invalid_argument& e) {
+                cerr << "Invalid input. Please enter a valid integer." << endl;
+            } catch (const out_of_range& e) {
+                cerr << "Input out of range for integer." << endl;
+            }
         }
-
+        sleep(1);
 
         
-        ssize_t bytes_received = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
-        if (bytes_received == -1) {
-            perror("Error receiving data");
-            close(sockfd);
-            return 1;
-        }
+        // ssize_t bytes_received = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
+        // if (bytes_received == -1) {
+        //     perror("Error receiving data");
+        //     close(sockfd);
+        //     return 1;
+        // }
 
-        buffer[bytes_received] = '\0';
-        cout << "Server response: " << buffer << endl;
-        memset(buffer, 0, sizeof(buffer));
+        // buffer[bytes_received] = '\0';
+        // cout << "Server response: " << buffer << endl;
+        // memset(buffer, 0, sizeof(buffer));
+
     }
 
     close(sockfd);

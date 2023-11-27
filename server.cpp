@@ -70,6 +70,26 @@ void addPermissionForUser(unordered_map<int, vector<int>>& permissions_map, int 
     logMessage(2, "addPermissionForUser", " Added permission for client with id: " + to_string(client_id_to_add_permission) + " to shutdown client with id: " + to_string(client_id_to_shutdown));
 }
 
+bool shutdownClient(unordered_map<int, int>& client_socket_map, int client_id_to_shutdown) {
+    char buffer[1024] = {0};
+    string shutdown_command = "SHUTDOWN";
+    int client_to_shutdown_socket_dp = client_socket_map[client_id_to_shutdown];
+    logMessage(3, "shutdownClient", " Send request to descriptor: " + to_string(client_to_shutdown_socket_dp));
+
+    int result = send(client_to_shutdown_socket_dp, shutdown_command.c_str(), shutdown_command.length(), 0);
+    logMessage(3, "shutdownClient", " Result: " + to_string(result));
+
+    recv(client_to_shutdown_socket_dp, buffer, sizeof(buffer), 0);
+    string result_message(buffer);
+    if (result_message == "SUCCESS") {
+        logMessage(2, "shutdownClient", " Client with id: " + to_string(client_id_to_shutdown) + " shutdowned successfully!");
+        return true;
+    } else {
+        logMessage(1, "shutdownClient", " Client with id: " + to_string(client_id_to_shutdown) + " not shutdowned!");
+    }
+    return false;
+}
+
 bool isAdminIdInVector(const vector<int>& admin_ids, int target_id) {
     for (int id : admin_ids) {
         if (id == target_id) {
@@ -79,7 +99,8 @@ bool isAdminIdInVector(const vector<int>& admin_ids, int target_id) {
     return false; // id not found
 }
 
-bool isPermissionAlreadyAdded(unordered_map<int, vector<int>>& permissions_map, int client_id_to_add_permission, int client_id_to_shutdown) {
+bool isIdInPermissionVector(unordered_map<int, vector<int>>& permissions_map, int client_id_to_add_permission, int client_id_to_shutdown) {
+
     for (int id : permissions_map[client_id_to_add_permission]) {
         if (id == client_id_to_shutdown) {
             return true; // id found
@@ -107,10 +128,10 @@ void handleAddAdminRequest(int client_sock, const Request& request, ThreadData& 
 void handleAddPermissionRequest(int client_sock, const Request& request, ThreadData& thread_data) {
     string response_message;
         logMessage(3, "handleAddPermissionRequest", 
-        " Add permissions for user: " + to_string(request.action_1_client_id) + " to shutdown user with id: " + to_string(request.action_2_client_id) + "by admin with id: " + to_string(request.client_id));
+        " Add permissions for user: " + to_string(request.action_1_client_id) + " to shutdown user with id: " + to_string(request.action_2_client_id) + " by admin with id: " + to_string(request.client_id));
     
     lock_guard<mutex> lock(thread_data.data_mutex);
-    if (!isPermissionAlreadyAdded(thread_data.client_id_permissions_map, request.action_1_client_id, request.action_2_client_id)) {
+    if (!isIdInPermissionVector(thread_data.client_id_permissions_map, request.action_1_client_id, request.action_2_client_id)) {
             addPermissionForUser(thread_data.client_id_permissions_map, request.action_1_client_id, request.action_2_client_id);   
             response_message = "Permission added successfully!";
             send(client_sock, response_message.c_str(), response_message.length(), 0);
@@ -121,6 +142,26 @@ void handleAddPermissionRequest(int client_sock, const Request& request, ThreadD
         //we convert string to byte array and send to client
         send(client_sock, response_message.c_str(), response_message.length(), 0);
     }
+}
+
+void handleShutdownClientRequest(int client_sock, const Request& request, ThreadData& thread_data) {
+    string response_message;
+        logMessage(3, "handleShutdownClientRequest", 
+        " Start shutdown client with id: " + to_string(request.action_1_client_id) + " by client with id: " + to_string(request.client_id));
+    
+    lock_guard<mutex> lock(thread_data.data_mutex);
+    if (isIdInPermissionVector(thread_data.client_id_permissions_map, request.client_id, request.action_1_client_id)) {
+            if(shutdownClient(thread_data.client_id_sock_map, request.action_1_client_id)) {
+                response_message = "Client shutdowned successfully!";
+            } else {
+                response_message = "There was some error with shutdown!";
+            }         
+    } else {
+        response_message = "You don't have permission to shutdown this client!";
+        
+    }
+    //we convert string to byte array and send to client
+    send(client_sock, response_message.c_str(), response_message.length(), 0);
 }
 
 void handleShowAllAdminsRequest(int client_sock, const Request& request, ThreadData& thread_data) {
@@ -216,7 +257,11 @@ void* clientHandler(void* arg) {
                      response_message = "You have not permission to add new admin id";
                     send(client_sock, response_message.c_str(), response_message.length(), 0);
                 }
+            } else if (request.action == "SHUTDOWN_CLIENT")
+            {
+                handleShutdownClientRequest(client_sock, request, *thread_data); 
             }
+            
             
         
         

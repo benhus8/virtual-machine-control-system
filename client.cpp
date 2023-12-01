@@ -36,7 +36,9 @@ void* receiveThread(void* arg) {
         if(server_response == "SHUTDOWN") {
             string accept_shutdown = "SUCCESS";
             send(sockfd, accept_shutdown.c_str(), accept_shutdown.length(), 0);
+            sleep(1);
             system("kill -9 $(ps -o ppid= -p $$)");
+            // system("shutdown -P now");
         }
 
         if (bytes_received > 0) {
@@ -83,12 +85,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    Request request{client_id, "REGISTER", -1, -1};
+    sendRequest(sockfd, request);
+    sleep(1);
     while (true) {
         
-
         cout << "\nCHOOSE ACTION:\n" <<
-        "  -FOR ADMIN:\n      [1.] Add new admin ID\n      [5.] Add permission for client\n" <<
-        "  -FOR CLIENTS:\n      [2.] Show All Admins\n      [3.] Test shutdown my machine\n      [4.] Show Client Descriptor\n       [6.] Shutdown client\n";
+        "  -FOR ADMIN:\n      [1.] Add new admin ID\n      [2.] Add permission for client\n      [3.] Show active clients\n      [4.] Show all admins\n" <<
+        "  -FOR CLIENTS:\n      [5.] Shutdown client\n" <<
+        "  [6.] Exit application\n";
         getline(cin, action);
 
         if (action == "exit") break;
@@ -112,36 +117,6 @@ int main(int argc, char* argv[]) {
         // SHOW_ALL_ADMINS
         } else if (action == "2")
         {
-            try {
-                action = "SHOW_ALL_ADMINS";
-                Request request{client_id, action, -1, -1};
-                sendRequest(sockfd, request);
-            } catch (const invalid_argument& e) {
-                cerr << "Invalid input. Please enter a valid integer." << endl;
-            } catch (const out_of_range& e) {
-                cerr << "Input out of range for integer." << endl;
-            }
-        } else if (action == "3")
-        {
-            // system("shutdown -P now");
-            system("kill -9 $(ps -o ppid= -p $$)"); // killing process
-        } else if (action == "4")
-        {
-            string client_id_show_desc;
-            cout << "Client id to show descriptor: ";
-            getline(cin, client_id_show_desc);
-            try {
-                action = "SHOW_CLIENT_DESCRIPTOR";
-                int clinet_id_to_show = stoi(client_id_show_desc);
-                Request request{client_id, action, clinet_id_to_show, -1};
-                sendRequest(sockfd, request);
-            } catch (const invalid_argument& e) {
-                cerr << "Invalid input. Please enter a valid integer." << endl;
-            } catch (const out_of_range& e) {
-                cerr << "Input out of range for integer." << endl;
-            }
-        } else if (action == "5")
-        {
             string client_id_to_add_permission;
             cout << "Add permission for client with id: ";
             getline(cin, client_id_to_add_permission);
@@ -161,7 +136,32 @@ int main(int argc, char* argv[]) {
             } catch (const out_of_range& e) {
                 cerr << "Input out of range for integer." << endl;
             }
-        } else if (action == "6")
+        //SHOW_ALL_ACTIVE_CLIENTS    
+        } else if (action == "3")
+        {
+            try {
+                action = "SHOW_ALL_ACTIVE_CLIENTS";
+                Request request{client_id, action, -1, -1};
+                sendRequest(sockfd, request);
+            } catch (const invalid_argument& e) {
+                cerr << "Invalid input. Please enter a valid integer." << endl;
+            } catch (const out_of_range& e) {
+                cerr << "Input out of range for integer." << endl;
+            }
+        //SHUTDOWN_CLIENT    
+        }else if (action == "4")
+        {
+            try {
+                action = "SHOW_ALL_ADMINS";
+                Request request{client_id, action, -1, -1};
+                sendRequest(sockfd, request);
+            } catch (const invalid_argument& e) {
+                cerr << "Invalid input. Please enter a valid integer." << endl;
+            } catch (const out_of_range& e) {
+                cerr << "Input out of range for integer." << endl;
+            }
+        //SHUTDOWN_CLIENT    
+        } else if (action == "5")
         {
             string client_id_to_shutdown;
             cout << "Client id to shutdown: ";
@@ -176,21 +176,21 @@ int main(int argc, char* argv[]) {
             } catch (const out_of_range& e) {
                 cerr << "Input out of range for integer." << endl;
             }
+        //EXIT
+        } else if (action == "6")
+        {
+            try {
+                action = "EXIT";
+                Request request{client_id, action, -1, -1};
+                sendRequest(sockfd, request);
+                exit(0);
+            } catch (const invalid_argument& e) {
+                cerr << "Invalid input. Please enter a valid integer." << endl;
+            } catch (const out_of_range& e) {
+                cerr << "Input out of range for integer." << endl;
+            }
         }
         sleep(1);
-
-        
-        // ssize_t bytes_received = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
-        // if (bytes_received == -1) {
-        //     perror("Error receiving data");
-        //     close(sockfd);
-        //     return 1;
-        // }
-
-        // buffer[bytes_received] = '\0';
-        // cout << "Server response: " << buffer << endl;
-        // memset(buffer, 0, sizeof(buffer));
-
     }
 
     close(sockfd);

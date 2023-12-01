@@ -44,20 +44,30 @@ struct ThreadData {
     vector<int>& admin_ids;
     unordered_map<int, int>& client_id_sock_map;
     unordered_map<int, vector<int>>& client_id_permissions_map;
+    vector<int>& active_clients;
     int client_sock;
 
-    ThreadData(vector<int>& admins, unordered_map<int, int>& client_map, unordered_map<int, vector<int>>& permissions, int sock)
-        : admin_ids(admins), client_id_sock_map(client_map), client_id_permissions_map(permissions) ,client_sock(sock) {}
+    ThreadData(vector<int>& admins, unordered_map<int, int>& client_map, unordered_map<int, vector<int>>& permissions, vector<int>& all_clients, int sock)
+        : admin_ids(admins), client_id_sock_map(client_map), client_id_permissions_map(permissions), active_clients(all_clients), client_sock(sock) {}
 
 };
-
-
 
 Request parseRequest(const char* buffer) {
     istringstream iss(buffer);
     Request request;
     iss >> request.client_id >> request.action >> request.action_1_client_id >> request.action_2_client_id;
     return request;
+}
+
+void deleteClientFromActiveClientsRegistry(vector<int>& active_clients, int id_to_delete) {
+     logMessage(3, "deleteClientFromActiveClientsRegistry", 
+        "Delete client with  id: " + to_string(id_to_delete) + " from active client registry");
+    for (auto it = active_clients.begin(); it != active_clients.end(); ++it) {
+            if (*it == id_to_delete) {
+                active_clients.erase(it);
+                break; 
+            }
+        }
 }
 
 void addAdminId(vector<int>& admin_ids, int new_id) {
@@ -152,6 +162,7 @@ void handleShutdownClientRequest(int client_sock, const Request& request, Thread
     lock_guard<mutex> lock(thread_data.data_mutex);
     if (isIdInPermissionVector(thread_data.client_id_permissions_map, request.client_id, request.action_1_client_id)) {
             if(shutdownClient(thread_data.client_id_sock_map, request.action_1_client_id)) {
+                deleteClientFromActiveClientsRegistry(thread_data.active_clients, request.action_1_client_id);
                 response_message = "Client shutdowned successfully!";
             } else {
                 response_message = "There was some error with shutdown!";
@@ -172,27 +183,47 @@ void handleShowAllAdminsRequest(int client_sock, const Request& request, ThreadD
     for(int id : thread_data.admin_ids) {
         response_message = response_message + to_string(id) + ", ";
     }
-    response_message = response_message + " ]";
 
-        //we convert string to byte array and send to client
-        send(client_sock, response_message.c_str(), response_message.length(), 0);
+    response_message = response_message.substr(0, response_message.size() - 2) + "]";
+    send(client_sock, response_message.c_str(), response_message.length(), 0);
     }
 
-void handleShowClientDescRequest(int client_sock, const Request& request, ThreadData& thread_data) {
-    string response_message = "Descriptor is: ";
-    unordered_map<int, int>& client_id_sock_map = thread_data.client_id_sock_map;
-    logMessage(4, "handleShowClientDescRequest", "Show client desc: " + to_string(request.client_id));
+void handleShowAllActiveClientsRequest(int client_sock, const Request& request, ThreadData& thread_data) {
+    string response_message = "Existing admin ids: [";
+    logMessage(4, "handleShowAllActiveClientsRequest", "Show all active clients for client with id: " + to_string(request.client_id));
 
     lock_guard<mutex> lock(thread_data.data_mutex);
-    int client_descriptor = -1;
+    for(int id : thread_data.active_clients) {
+        response_message = response_message + to_string(id) + ", ";
+    }
+
+    response_message = response_message.substr(0, response_message.size() - 2) + "]";
+    send(client_sock, response_message.c_str(), response_message.length(), 0);
+    }
+
+void handleExitClientRequest(int client_sock, const Request& request, ThreadData& thread_data) {
+    logMessage(4, "handleExitClientRequest", "Client with id: " + to_string(request.client_id) + " exited");
+
+    lock_guard<mutex> lock(thread_data.data_mutex);
     {
-            auto it = client_id_sock_map.find(request.action_1_client_id);
-            if (it != client_id_sock_map.end()) {
-                client_descriptor = it->second;
+        for (auto it = thread_data.active_clients.begin(); it != thread_data.active_clients.end(); ++it) {
+            if (*it == request.client_id) {
+                thread_data.active_clients.erase(it);
+                break; 
             }
         }
-    response_message = response_message + to_string(client_descriptor);
+    }
+    }
 
+void handleRegisterActiveClient(int client_sock, const Request& request, ThreadData& thread_data) {
+    string response_message = "Connected successfully!";
+    unordered_map<int, int>& client_id_sock_map = thread_data.client_id_sock_map;
+    logMessage(4, "handleRegisterActiveClient", "Active client with id: " + to_string(request.client_id) + " registered");
+
+    lock_guard<mutex> lock(thread_data.data_mutex);
+    {
+        thread_data.active_clients.push_back(request.client_id);
+    }
         //we convert string to byte array and send to client
         send(client_sock, response_message.c_str(), response_message.length(), 0);
     }
@@ -220,7 +251,6 @@ void* clientHandler(void* arg) {
     char buffer[1024] = {0};
 
     bool client_id_added_to_map = false;
-    cout << client_sock << endl;
     while (true) {
         //RECEIVE DATA
         recv(client_sock, buffer, sizeof(buffer), 0);
@@ -243,32 +273,41 @@ void* clientHandler(void* arg) {
                 }
             } else if (request.action == "SHOW_ALL_ADMINS")
             {
-                handleShowAllAdminsRequest(client_sock, request, *thread_data);
-
-            } else if (request.action == "SHOW_CLIENT_DESCRIPTOR")
+                if (authenticateAdmin(client_sock, request, *thread_data)) {
+                    handleShowAllAdminsRequest(client_sock, request, *thread_data);
+                } else {
+                    string response_message = "You have not permission to show all admins";
+                    send(client_sock, response_message.c_str(), response_message.length(), 0);
+                }
+            } else if (request.action == "REGISTER")
             {
-                handleShowClientDescRequest(client_sock, request, *thread_data);
-
+                handleRegisterActiveClient(client_sock, request, *thread_data);
             } else if (request.action == "ADD_PERMISSION")
             {
                 if(authenticateAdmin(client_sock, request, *thread_data)) {
                     handleAddPermissionRequest(client_sock, request, *thread_data); 
                 } else {
-                     response_message = "You have not permission to add new admin id";
+                     response_message = "You have not permission to add shutdown permissions for clients";
                     send(client_sock, response_message.c_str(), response_message.length(), 0);
                 }
             } else if (request.action == "SHUTDOWN_CLIENT")
             {
                 handleShutdownClientRequest(client_sock, request, *thread_data); 
+            } else if (request.action == "SHOW_ALL_ACTIVE_CLIENTS")
+            {
+                if (authenticateAdmin(client_sock, request, *thread_data)) {
+                    handleShowAllActiveClientsRequest(client_sock, request, *thread_data); 
+                } else {
+                    string response_message = "You have not permission to show all active clients";
+                    send(client_sock, response_message.c_str(), response_message.length(), 0);
+                }
+            } else if (request.action == "EXIT")
+            {
+                handleExitClientRequest(client_sock, request, *thread_data);
             }
             
-            
-        
-        
         memset(buffer, 0, sizeof(buffer));
     }
-    
-
 }
 
 int main() {
@@ -293,24 +332,32 @@ int main() {
         return 1;
     }
 
-    cout << "[MAIN-LOG] Server listening on port 8888..." << std::endl;
+    cout << "[MAIN] Server listening on port 8888..." << std::endl;
 
     vector<pthread_t> thread_ids;
     vector<int> admin_ids;
+    vector<int> active_clients;
     unordered_map<int, int> client_id_sock_map;
     unordered_map<int, vector<int>> client_id_permissions_map;
     admin_ids.push_back(1); // initally we have one ADMIN with id: 1
 
     while (true) {
-        cout << "[MAIN-LOG] Wait for new connection...\n";
+        
         int client_sock = accept(server_sock, nullptr, nullptr);
+        cout << "[MAIN] New client connected\n";
         if (client_sock == -1) {
             perror("Accept failed");
             continue;
         }
-        ThreadData* thread_data = new ThreadData{admin_ids, client_id_sock_map, client_id_permissions_map, client_sock};
+        ThreadData* thread_data = new ThreadData {
+            admin_ids, 
+            client_id_sock_map, 
+            client_id_permissions_map, 
+            active_clients, 
+            client_sock
+            };
 
-        // Tworzymy nowy wątek dla obsługi klienta
+        // creeating client thread
         pthread_t thread_id;
         if (pthread_create(&thread_id, NULL, clientHandler, (void*)thread_data) != 0) {
             perror("Failed to create thread");
@@ -319,16 +366,14 @@ int main() {
             continue;
         }
 
-        // Dodajemy identyfikator wątku do wektora
         thread_ids.push_back(thread_id);
         pthread_detach(thread_id);
     }
 
-    // Oczekiwanie na zakończenie wszystkich wątków
+    // waiting for all threads go down
     for (pthread_t thread_id : thread_ids) {
         pthread_join(thread_id, NULL);
     }
-
     close(server_sock);
     return 0;
 }

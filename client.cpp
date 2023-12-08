@@ -49,7 +49,6 @@ void* receiveThread(void* arg) {
     }
 }
 
-
 int main(int argc, char* argv[]) {
     if (argc != 2) {
         cerr << "Usage: " << argv[0] << " <client_id>" << endl;
@@ -114,7 +113,7 @@ int main(int argc, char* argv[]) {
                 cerr << "Input out of range for integer." << endl;
             }
         
-        // SHOW_ALL_ADMINS
+        // ADD_PERMISSION
         } else if (action == "2")
         {
             string client_id_to_add_permission;
@@ -148,7 +147,7 @@ int main(int argc, char* argv[]) {
             } catch (const out_of_range& e) {
                 cerr << "Input out of range for integer." << endl;
             }
-        //SHUTDOWN_CLIENT    
+        //SHOW_ALL_ADMINS    
         }else if (action == "4")
         {
             try {

@@ -8,6 +8,7 @@
 #include <cstring>  //memset
 #include <mutex>
 #include <unordered_map>
+#include <algorithm> 
 
 using namespace std;
 namespace Colors {
@@ -50,6 +51,20 @@ struct ThreadData {
     ThreadData(vector<int>& admins, unordered_map<int, int>& client_map, unordered_map<int, vector<int>>& permissions, vector<int>& all_clients, int sock)
         : admin_ids(admins), client_id_sock_map(client_map), client_id_permissions_map(permissions), active_clients(all_clients), client_sock(sock) {}
 
+    void removeClientIdFromLists(int client_id) {
+
+        //Usuwanie z client_id_permissions_map
+        auto permissions_map_it = client_id_permissions_map.find(client_id);
+        if (permissions_map_it != client_id_permissions_map.end()) {
+            client_id_permissions_map.erase(permissions_map_it);
+        }
+
+        // Usuwanie z active_clients
+        auto active_clients_it = find(active_clients.begin(), active_clients.end(), client_id);
+        if (active_clients_it != active_clients.end()) {
+            active_clients.erase(active_clients_it);
+        }
+    }
 };
 
 Request parseRequest(const char* buffer) {
@@ -189,7 +204,7 @@ void handleShowAllAdminsRequest(int client_sock, const Request& request, ThreadD
     }
 
 void handleShowAllActiveClientsRequest(int client_sock, const Request& request, ThreadData& thread_data) {
-    string response_message = "Existing admin ids: [";
+    string response_message = "Active client ids: [";
     logMessage(4, "handleShowAllActiveClientsRequest", "Show all active clients for client with id: " + to_string(request.client_id));
 
     lock_guard<mutex> lock(thread_data.data_mutex);
@@ -238,15 +253,44 @@ bool authenticateAdmin(int client_sock, const Request& request, ThreadData& thre
         }
 }
 
+void* checkClientConnections(void* arg) {
+    ThreadData* thread_data = (ThreadData*)arg;
+
+    while (true) {
+        sleep(5);
+        {
+            lock_guard<mutex> lock(thread_data->data_mutex);
+            auto it = thread_data->client_id_sock_map.begin();
+            while (it != thread_data->client_id_sock_map.end()) {
+                int client_id = it->first;
+                int client_sock = it->second;
+
+                char buffer[1];
+                int result = recv(client_sock, buffer, 1, MSG_DONTWAIT);
+
+                if (result == 0) {
+                    if (result == 0) {
+                        logMessage(1, "checkClientConnections", "Client with id: " + to_string(client_id) + " disconnected ");
+                    } else {
+                        perror("Recv failed");
+                    }
+                    thread_data->removeClientIdFromLists(client_id);
+                    it = thread_data->client_id_sock_map.erase(it);
+                    continue;
+                }
+                ++it;
+            }
+        }
+    }
+}
+
 // client loop
 void* clientHandler(void* arg) {
     //THREAD DATA
     ThreadData* thread_data = (ThreadData*)arg;
     int client_sock = thread_data->client_sock;
-    vector<int>& admin_ids = thread_data->admin_ids;
     unordered_map<int, int>& client_id_sock_map = thread_data->client_id_sock_map;
-    unordered_map<int, vector<int>>&  client_id_permissions_map = thread_data->client_id_permissions_map;
-    
+
     string response_message;
     char buffer[1024] = {0};
 
@@ -344,7 +388,8 @@ int main() {
     while (true) {
         
         int client_sock = accept(server_sock, nullptr, nullptr);
-        cout << "[MAIN] New client connected\n";
+        cout << "[MAIN] New client connected + sock:  \n";
+        cout << client_sock;
         if (client_sock == -1) {
             perror("Accept failed");
             continue;
@@ -356,6 +401,15 @@ int main() {
             active_clients, 
             client_sock
             };
+
+        pthread_t check_connections_thread;
+        if (pthread_create(&check_connections_thread, NULL, checkClientConnections, (void*)thread_data) != 0) {
+            perror("Failed to create check connections thread");
+            close(server_sock);
+            return 1;
+        }
+        thread_ids.push_back(check_connections_thread);
+        pthread_detach(check_connections_thread);
 
         // creeating client thread
         pthread_t thread_id;
